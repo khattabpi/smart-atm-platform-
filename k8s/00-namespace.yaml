@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: smart-atm
+  labels:
+    name: smart-atm
+    app: smart-atm-platform

@@ -1,0 +1,47 @@
+# Environment
+.env
+.env.local
+*.env.local
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.tar
+
+# Kubernetes secrets (NEVER commit real ones!)
+k8s/*-secret*.yaml
+!k8s/01-secrets.yaml      # template only — uses REPLACE_ME placeholders
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db

@@ -1,0 +1,66 @@
+services:
+  # ===== PostgreSQL =====
+  postgres:
+    image: postgres:16-alpine
+    container_name: atm_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atm_db
+      POSTGRES_USER: atm_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-atm_secret_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atm_user -d atm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - atm_network
+
+  # ===== FastAPI Backend =====
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: atm_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://atm_user:${DB_PASSWORD:-atm_secret_change_me}@postgres:5432/atm_db
+      SECRET_KEY: ${SECRET_KEY:-change-this-to-a-long-random-string}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      CORS_ORIGINS: '["http://localhost", "http://localhost:80", "http://frontend"]'
+      DEBUG: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - atm_network
+
+  # ===== React Frontend (nginx) =====
+  frontend:
+    build:
+      context: ./frontend-react
+    container_name: atm_frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_HOST: "backend:8000"          # ← Docker Compose service name
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    networks:
+      - atm_network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  atm_network:
+    driver: bridge
