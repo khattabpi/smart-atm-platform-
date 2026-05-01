@@ -38,7 +38,7 @@ npm-debug.log*
 # Kubernetes secrets (NEVER commit real ones!)
 k8s/*-secret*.yaml
 !k8s/01-secrets.yaml      # template only — uses REPLACE_ME placeholders
-
+minikube-linux-amd64
 # Logs
 *.log
 logs/
