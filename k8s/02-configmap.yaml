@@ -4,10 +4,9 @@ metadata:
   name: smart-atm-config
   namespace: smart-atm
 data:
-  POSTGRES_DB: "atm_db"
-  POSTGRES_USER: "atm_user"
-  ALGORITHM: "HS256"
-  ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
-  CORS_ORIGINS: '["*"]'
-  DEBUG: "false"
-  APP_NAME: "Smart ATM Platform"
+  ENV: "production"
+  REDIS_URL: "redis://redis:6379/0"
+  RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+  REDIS_ENABLED: "true"
+  RABBITMQ_ENABLED: "true"
+  RATE_LIMIT_PER_MINUTE: "120"

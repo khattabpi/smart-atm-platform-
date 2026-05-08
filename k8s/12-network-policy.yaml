@@ -1,8 +1,64 @@
-# Only the backend can talk to postgres. Defense-in-depth.
+# ==============================================================================
+# NetworkPolicy — Smart ATM Platform
+# ==============================================================================
+# Implements zero-trust networking inside the smart-atm namespace.
+# Each policy is scoped to a single workload (postgres, redis, rabbitmq, backend,
+# worker, frontend) and explicitly whitelists allowed traffic.
+#
+# Default behavior: anything not explicitly allowed is DENIED.
+# ==============================================================================
+
+---
+# ------------------------------------------------------------------------------
+# 1. DEFAULT DENY — baseline for the whole namespace
+#    Denies ALL ingress/egress unless another policy explicitly allows it.
+# ------------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: postgres-allow-backend-only
+  name: default-deny-all
+  namespace: smart-atm
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ------------------------------------------------------------------------------
+# 2. ALLOW DNS — every pod needs to resolve cluster + external DNS
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: smart-atm
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 3. POSTGRES — only backend + worker may connect on 5432
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-policy
   namespace: smart-atm
 spec:
   podSelector:
@@ -15,6 +71,193 @@ spec:
         - podSelector:
             matchLabels:
               app: backend
+        - podSelector:
+            matchLabels:
+              app: worker
       ports:
-        - protocol: TCP
-          port: 5432
+        - port: 5432
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 4. REDIS — only backend + worker may connect on 6379
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-policy
+  namespace: smart-atm
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              app: worker
+      ports:
+        - port: 6379
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 5. RABBITMQ — only backend + worker may connect on 5672 (AMQP)
+#    Port 15672 (management UI) is intentionally NOT exposed via NetworkPolicy.
+#    Use `kubectl port-forward` for admin access.
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq-policy
+  namespace: smart-atm
+spec:
+  podSelector:
+    matchLabels:
+      app: rabbitmq
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              app: worker
+      ports:
+        - port: 5672
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 6. BACKEND — accepts traffic from ingress controller + frontend
+#              egresses to postgres, redis, rabbitmq
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-policy
+  namespace: smart-atm
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # From the nginx ingress controller (typical label setup)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    # RabbitMQ (AMQP)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rabbitmq
+      ports:
+        - port: 5672
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 7. WORKER — same egress profile as backend (DB + Redis + RabbitMQ)
+#             no ingress (workers don't accept traffic)
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-policy
+  namespace: smart-atm
+spec:
+  podSelector:
+    matchLabels:
+      app: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rabbitmq
+      ports:
+        - port: 5672
+          protocol: TCP
+
+---
+# ------------------------------------------------------------------------------
+# 8. FRONTEND — accepts traffic from ingress controller
+#               egresses only to backend (proxied API calls)
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-policy
+  namespace: smart-atm
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 80
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - port: 8000
+          protocol: TCP

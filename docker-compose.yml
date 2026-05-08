@@ -1,13 +1,22 @@
+# ==============================================================================
+# Smart ATM Platform — Full Stack
+# ==============================================================================
+# Services: postgres, redis, rabbitmq, backend, worker, frontend
+# ==============================================================================
+
 services:
-  # ===== PostgreSQL =====
+
+  # ----------------------------------------------------------------------------
+  # PostgreSQL — System of record
+  # ----------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: atm_postgres
+    container_name: smart_atm_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: atm_db
       POSTGRES_USER: atm_user
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-atm_secret_change_me}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: atm_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -18,49 +27,126 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - atm_network
+      - smart_atm_net
 
-  # ===== FastAPI Backend =====
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: atm_backend
+  # ----------------------------------------------------------------------------
+  # Redis — Cache + Pub/Sub for WebSockets
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: smart_atm_redis
     restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - smart_atm_net
+
+  # ----------------------------------------------------------------------------
+  # RabbitMQ — Asynchronous event bus
+  # ----------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: smart_atm_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI (http://localhost:15672 — guest/guest)
     environment:
-      DATABASE_URL: postgresql://atm_user:${DB_PASSWORD:-atm_secret_change_me}@postgres:5432/atm_db
-      SECRET_KEY: ${SECRET_KEY:-change-this-to-a-long-random-string}
-      ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
-      CORS_ORIGINS: '["http://localhost", "http://localhost:80", "http://frontend"]'
-      DEBUG: "false"
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smart_atm_net
+
+  # ----------------------------------------------------------------------------
+  # Backend — FastAPI application
+  # ----------------------------------------------------------------------------
+  backend:
+    build: ./backend
+    container_name: smart_atm_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://atm_user:${DB_PASSWORD}@postgres:5432/atm_db
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SECRET_KEY: ${SECRET_KEY}
+      ENV: production
+      REDIS_ENABLED: "true"
+      RABBITMQ_ENABLED: "true"
+      CORS_ORIGINS: '["http://localhost", "http://localhost:5173"]'
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
-      - atm_network
+      - smart_atm_net
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # ===== React Frontend (nginx) =====
-  frontend:
-    build:
-      context: ./frontend-react
-    container_name: atm_frontend
+  # ----------------------------------------------------------------------------
+  # Worker — Consumes RabbitMQ events (reliability decay, notifications, etc.)
+  # ----------------------------------------------------------------------------
+  worker:
+    build: ./backend
+    container_name: smart_atm_worker
     restart: unless-stopped
+    command: python -m app.workers.main
     environment:
-      BACKEND_HOST: "backend:8000"          # ← Docker Compose service name
+      DATABASE_URL: postgresql://atm_user:${DB_PASSWORD}@postgres:5432/atm_db
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SECRET_KEY: ${SECRET_KEY}
+      ENV: production
+      REDIS_ENABLED: "true"
+      RABBITMQ_ENABLED: "true"
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - smart_atm_net
+    healthcheck:
+      disable: true
+
+  # ----------------------------------------------------------------------------
+  # Frontend — React + nginx
+  # ----------------------------------------------------------------------------
+  frontend:
+    build: ./frontend-react
+    container_name: smart_atm_frontend
+    restart: unless-stopped
     ports:
       - "80:80"
+    depends_on:
+      - backend
     networks:
-      - atm_network
+      - smart_atm_net
+
+# ==============================================================================
+# Networks & Volumes
+# ==============================================================================
+networks:
+  smart_atm_net:
+    driver: bridge
 
 volumes:
   postgres_data:
     driver: local
-
-networks:
-  atm_network:
-    driver: bridge

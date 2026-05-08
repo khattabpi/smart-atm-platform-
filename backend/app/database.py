@@ -1,22 +1,21 @@
-"""
-Database engine and session management using SQLAlchemy.
-Switches automatically between SQLite (MVP) and Postgres (prod).
-"""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-from app.config import get_settings
+from app.core.config import settings
 
-settings = get_settings()
+engine_kwargs = {"pool_pre_ping": True}
+if not settings.DATABASE_URL.startswith("sqlite"):
+    engine_kwargs.update({
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_recycle": settings.DB_POOL_RECYCLE,
+    })
 
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
-
-engine = create_engine(settings.DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
 def get_db():
-    """FastAPI dependency that yields a DB session and closes it after the request."""
     db = SessionLocal()
     try:
         yield db
